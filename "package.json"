@@ -1,1 +1,77 @@
+package.json
 
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys')
+const P = require('pino')
+const qrcode = require('qrcode-terminal')
+
+const BOT_NAME = "MD MIZANUR RAHMAN MIZAN"
+const BAD_WORDS = ['boka', 'gali', 'mc', 'bc'] // এখানে তোমার গালির লিস্ট বসাবা
+let stickerCount = {}
+
+async function startBot() {
+    const { state, saveCreds } = await useMultiFileAuthState('auth')
+    const sock = makeWASocket({ auth: state, logger: P({ level: 'silent' }), printQRInTerminal: false, browser: [BOT_NAME, 'Chrome', '1.0'] })
+
+    sock.ev.on('creds.update', saveCreds)
+
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, qr } = update
+        if (qr) {
+            qrcode.generate(qr, { small: true })
+            console.log('এই QR Scan করো WhatsApp > Linked Devices থেকে')
+        }
+        if (connection === 'open') {
+            console.log('✅ Bot চালু হয়ে গেছে - ' + BOT_NAME)
+        }
+    })
+
+    // Welcome System
+    sock.ev.on('group-participants.update', async (an) => {
+        if (an.action === 'add') {
+            for (let user of an.participants) {
+                try {
+                    let name = user.split('@')[0]
+                    let pp = await sock.profilePictureUrl(user, 'image').catch(() => 'https://i.ibb.co/5cD0Z2z/no-photo.png')
+                    await sock.sendMessage(an.id, { 
+                        image: { url: pp }, 
+                        caption: `Welcome @${name} 🌸\n\n*${BOT_NAME} BOARD এ তোমাকে স্বাগতম*\n!rules লিখে নিয়ম দেখো`, 
+                        mentions: [user] 
+                    })
+                } catch {}
+            }
+        }
+    })
+
+    // Auto Moderation
+    sock.ev.on('messages.upsert', async ({ messages }) => {
+        const msg = messages[0]
+        if (!msg.message || msg.key.fromMe) return
+        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || '').toLowerCase()
+        const groupId = msg.key.remoteJid
+        const sender = msg.key.participant || msg.key.remoteJid
+
+        if (!groupId.endsWith('@g.us')) return
+
+        // 1. গালি দিলে কিক
+        if (BAD_WORDS.some(w => text.includes(w))) {
+            await sock.sendMessage(groupId, { text: `গালি দেওয়ার জন্য @${sender.split('@')[0]} কে রিমুভ করা হলো`, mentions: [sender] })
+            await sock.groupParticipantsUpdate(groupId, [sender], 'remove').catch(()=>{})
+        }
+
+        // 2. 3টা স্টিকারের পর কিক
+        if (msg.message.stickerMessage) {
+            stickerCount[sender] = (stickerCount[sender] || 0) + 1
+            if (stickerCount[sender] >= 3) {
+                await sock.sendMessage(groupId, { text: `3 বার স্টিকার দেওয়ার জন্য @${sender.split('@')[0]} কে রিমুভ করা হলো`, mentions: [sender] })
+                await sock.groupParticipantsUpdate(groupId, [sender], 'remove').catch(()=>{})
+                stickerCount[sender] = 0
+            }
+        }
+
+        // 3. Rules Command
+        if (text === '!rules') {
+            await sock.sendMessage(groupId, { text: `*${BOT_NAME} BOARD RULES*\n\n1. গালি দিলে কিক\n2. 3টা স্টিকার দিলে কিক\n3. 18+ দিলে কিক\n4. রাত 12টা-6টা গ্রুপ বন্ধ` })
+        }
+    })
+}
+startBot()
